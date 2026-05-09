@@ -1,109 +1,194 @@
 """
-Loaders + sanity inspectors for the two input CSVs.
+Live-sensor ingestion for the rover impedance probe.
 
-Dataset.csv  -> frequency-resolved EIS spectra (real data for the core
-                pipeline: Nyquist/Bode/ZARC).
-soil_impedance_all.csv -> scalar soil impedance + metadata (no frequency
-                sweep, so NOT usable for ZARC fitting).
+The bus delivers each frequency sweep as a JSON-serialisable payload.
+``load_sensor_sweep`` accepts both supported shapes and returns a
+:class:`Spectrum` ready for :func:`zarc_fitting.fit_spectrum`.
+
+Wire formats accepted
+---------------------
+1. **Per-point list** (one dict per frequency sample)::
+
+       [
+         {"frequency_hz": 1.0e6, "re_z_ohm": 3160.0, "neg_im_z_ohm": 9670.0},
+         {"frequency_hz": 9.26e5, "re_z_ohm": 3480.0, "neg_im_z_ohm": 10200.0},
+         ...
+       ]
+
+2. **Column-array dict** (one dict for the whole sweep)::
+
+       {
+         "sample_id":     "soil-001",                     # optional
+         "timestamp":     "2026-05-09T14:21:03Z",         # optional
+         "frequency_hz":  [1.0e6, 9.26e5, ...],
+         "re_z_ohm":      [3160.0, 3480.0, ...],
+         "neg_im_z_ohm":  [9670.0, 10200.0, ...]
+       }
+
+A raw JSON string in either of the above shapes is also accepted.
+
+Sign convention
+---------------
+``neg_im_z_ohm`` is **-Im(Z)** as transmitted by the probe (positive for
+capacitive media). Internally we store ``Z = Re(Z) + j*Im(Z)`` with
+``Im(Z) <= 0`` so downstream maths matches standard EIS textbooks.
 """
-from pathlib import Path
-from typing import Dict
+from __future__ import annotations
 
-import pandas as pd
+import json
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
-from .utils import get_logger, to_numeric_strip
+import numpy as np
+
+from .preprocessing import Spectrum
+from .utils import get_logger
+from config import MIN_POINTS_PER_SPECTRUM
 
 log = get_logger()
 
+# Required field names on the wire
+_REQUIRED_KEYS: Tuple[str, str, str] = (
+    "frequency_hz", "re_z_ohm", "neg_im_z_ohm"
+)
 
-def _clean_columns(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df.columns = [c.strip().strip('"').strip("'") for c in df.columns]
-    return df
+PointDict = Mapping[str, float]
+SweepPayload = Union[str, bytes, Mapping[str, Any], Sequence[PointDict]]
 
 
-# ----------------------------- EIS dataset ------------------------------
-def load_eis(path: Path) -> pd.DataFrame:
-    """Load Dataset.csv and return a cleaned dataframe ready for grouping."""
-    df = pd.read_csv(path, dtype=str)        # read as text first
-    df = _clean_columns(df)
+# ---------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------
+def load_sensor_sweep(data_payload: SweepPayload) -> Spectrum:
+    """Convert a single sensor-bus payload into a :class:`Spectrum`.
 
-    rename = {
-        "Ionic radius": "ionic_radius",
-        "Temperature": "temperature",
-        "Frequency": "frequency",
-        "Re(Z)": "re_z",
-        "Img(Z)": "im_z",
-    }
-    df = df.rename(columns=rename)
+    Parameters
+    ----------
+    data_payload
+        Raw payload from the rover sensor bus. May be a JSON string, a
+        list of point-dicts, or a column-array dict (see module docstring).
 
-    expected = ["ionic_radius", "temperature", "frequency", "re_z", "im_z"]
-    missing = [c for c in expected if c not in df.columns]
+    Returns
+    -------
+    Spectrum
+        Validated, frequency-sorted spectrum with ``Im(Z) <= 0``.
+
+    Raises
+    ------
+    ValueError
+        If required fields are missing, arrays are mis-aligned, or the
+        sweep contains fewer than :data:`config.MIN_POINTS_PER_SPECTRUM`
+        valid points.
+    """
+    payload = _coerce_to_python(data_payload)
+
+    if isinstance(payload, Mapping):
+        f_hz, re_z, neg_im_z, sample_id, timestamp = _from_column_dict(payload)
+    elif isinstance(payload, Sequence):
+        f_hz, re_z, neg_im_z, sample_id, timestamp = _from_point_list(payload)
+    else:
+        raise ValueError(
+            f"Unsupported payload type: {type(payload).__name__}. "
+            "Expected JSON string, dict of arrays, or list of point-dicts."
+        )
+
+    # Sign convention: probe sends -Im(Z) as positive; store internal Im <= 0
+    Z = re_z.astype(np.float64) - 1j * np.abs(neg_im_z.astype(np.float64))
+
+    spectrum = Spectrum(
+        f=f_hz.astype(np.float64),
+        Z=Z,
+        sample_id=sample_id,
+        timestamp=timestamp,
+    )
+
+    if spectrum.n_points < MIN_POINTS_PER_SPECTRUM:
+        raise ValueError(
+            f"Sweep has only {spectrum.n_points} valid points; "
+            f"need at least {MIN_POINTS_PER_SPECTRUM} for a stable ZARC fit."
+        )
+
+    log.info(
+        f"Loaded sweep "
+        f"(sample_id={spectrum.sample_id}, n={spectrum.n_points}, "
+        f"f={spectrum.f.min():.3g}-{spectrum.f.max():.3g} Hz)"
+    )
+    return spectrum
+
+
+# ---------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------
+def _coerce_to_python(payload: SweepPayload) -> Union[Mapping, Sequence]:
+    """Decode bytes/str payloads to native Python objects."""
+    if isinstance(payload, (bytes, bytearray)):
+        payload = payload.decode("utf-8")
+    if isinstance(payload, str):
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Payload is not valid JSON: {exc}") from exc
+    return payload
+
+
+def _from_column_dict(
+    payload: Mapping[str, Any],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[str], Optional[str]]:
+    """Extract aligned arrays from a column-array dict."""
+    missing = [k for k in _REQUIRED_KEYS if k not in payload]
     if missing:
-        raise ValueError(f"Dataset.csv is missing columns: {missing}")
+        raise ValueError(f"Payload is missing required keys: {missing}")
 
-    for col in expected:
-        df[col] = to_numeric_strip(df[col])
+    try:
+        f_hz = np.asarray(payload["frequency_hz"], dtype=np.float64)
+        re_z = np.asarray(payload["re_z_ohm"], dtype=np.float64)
+        neg_im_z = np.asarray(payload["neg_im_z_ohm"], dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Could not coerce payload arrays to float64: {exc}") from exc
 
-    n_before = len(df)
-    df = df.dropna(subset=expected).drop_duplicates()
-    log.info(f"EIS rows: {len(df)} (dropped {n_before - len(df)} bad/duplicate)")
-    return df
+    if not (f_hz.shape == re_z.shape == neg_im_z.shape):
+        raise ValueError(
+            f"Array length mismatch: f={f_hz.shape}, "
+            f"re={re_z.shape}, neg_im={neg_im_z.shape}"
+        )
+    if f_hz.ndim != 1:
+        raise ValueError(f"Expected 1-D arrays, got ndim={f_hz.ndim}")
 
-
-def inspect_eis(df: pd.DataFrame) -> Dict:
-    """Return summary statistics about the EIS dataframe."""
-    info = {
-        "n_rows": int(len(df)),
-        "n_ionic_radii": int(df["ionic_radius"].nunique()),
-        "n_temperatures": int(df["temperature"].nunique()),
-        "n_spectra": int(df.groupby(["ionic_radius", "temperature"]).ngroups),
-        "freq_min_hz": float(df["frequency"].min()),
-        "freq_max_hz": float(df["frequency"].max()),
-        "re_z_range": (float(df["re_z"].min()), float(df["re_z"].max())),
-        "im_z_range": (float(df["im_z"].min()), float(df["im_z"].max())),
-    }
-    return info
+    sample_id = payload.get("sample_id")
+    timestamp = payload.get("timestamp")
+    return f_hz, re_z, neg_im_z, _opt_str(sample_id), _opt_str(timestamp)
 
 
-# ----------------------------- Soil dataset -----------------------------
-def load_soil(path: Path) -> pd.DataFrame:
-    """Load soil_impedance_all.csv. NOTE: only one impedance value per row."""
-    df = pd.read_csv(path, dtype=str)
-    df = _clean_columns(df)
+def _from_point_list(
+    payload: Sequence[PointDict],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Optional[str], Optional[str]]:
+    """Extract aligned arrays from a list of per-point dicts."""
+    if len(payload) == 0:
+        raise ValueError("Empty sweep payload")
 
-    # Strip embedded quotes from string fields
-    for col in df.select_dtypes(include="object").columns:
-        df[col] = df[col].astype(str).str.strip().str.strip("'\"").str.strip()
+    n = len(payload)
+    f_hz = np.empty(n, dtype=np.float64)
+    re_z = np.empty(n, dtype=np.float64)
+    neg_im_z = np.empty(n, dtype=np.float64)
 
-    numeric_cols = ["SAMPLE_DISTANCE", "PROBE_DEPTH", "SOIL_TEMP",
-                    "TOTAL_IMPEDANCE"]
-    for c in numeric_cols:
-        if c in df.columns:
-            df[c] = to_numeric_strip(df[c])
+    for i, pt in enumerate(payload):
+        if not isinstance(pt, Mapping):
+            raise ValueError(
+                f"Point {i} is not a dict: got {type(pt).__name__}"
+            )
+        missing = [k for k in _REQUIRED_KEYS if k not in pt]
+        if missing:
+            raise ValueError(f"Point {i} is missing keys: {missing}")
+        try:
+            f_hz[i] = float(pt["frequency_hz"])
+            re_z[i] = float(pt["re_z_ohm"])
+            neg_im_z[i] = float(pt["neg_im_z_ohm"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Point {i} has non-numeric field: {exc}"
+            ) from exc
 
-    if "OBS_DATE" in df.columns:
-        df["OBS_DATE"] = pd.to_datetime(df["OBS_DATE"],
-                                        errors="coerce", format="%d-%b-%y")
-
-    log.info(f"Soil rows: {len(df)} | unique stations: "
-             f"{df.get('STATION_ID', pd.Series()).nunique()}")
-    return df
+    return f_hz, re_z, neg_im_z, None, None
 
 
-def inspect_soil(df: pd.DataFrame) -> Dict:
-    info = {
-        "n_rows": int(len(df)),
-        "n_missing_impedance": int(df["TOTAL_IMPEDANCE"].isna().sum()),
-        "n_missing_temp": int(df["SOIL_TEMP"].isna().sum()),
-        "impedance_stats": {
-            "min": float(df["TOTAL_IMPEDANCE"].min()),
-            "median": float(df["TOTAL_IMPEDANCE"].median()),
-            "mean": float(df["TOTAL_IMPEDANCE"].mean()),
-            "max": float(df["TOTAL_IMPEDANCE"].max()),
-        },
-        "depths_present": sorted(df["PROBE_DEPTH"].dropna().unique().tolist()),
-        "n_stations": int(df["STATION_ID"].nunique())
-            if "STATION_ID" in df.columns else None,
-    }
-    return info
+def _opt_str(value: Any) -> Optional[str]:
+    return None if value is None else str(value)

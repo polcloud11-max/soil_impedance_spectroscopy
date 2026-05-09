@@ -1,104 +1,74 @@
 """
-Group EIS rows into individual spectra and build the complex-impedance array.
+Spectrum container used throughout the rover pipeline.
 
-Sign convention
----------------
-The CSV stores Img(Z) as POSITIVE values that grow at low frequency. For
-RC-like systems the standard physics convention is Im(Z) <= 0, so we treat
-the stored value as |Im(Z)|. Internally we keep Z = Re + j*Im with Im <= 0,
-and Nyquist plots show -Im(Z) on the y-axis (positive, upward arcs).
+A ``Spectrum`` holds one frequency sweep:
+
+* ``f``     - frequencies in Hz (positive, descending after construction)
+* ``Z``     - complex impedance Re(Z) + j*Im(Z) with ``Im(Z) <= 0``
+              (capacitive convention; the sensor sends ``-Im(Z)`` as a
+              positive number, the loader negates it on the way in)
+
+Optional metadata fields ``sample_id`` and ``timestamp`` are propagated
+into the JSON output but never affect the fit.
 """
-from typing import Dict, List
+from __future__ import annotations
+
+from typing import Optional
 
 import numpy as np
-import pandas as pd
-
-from .utils import get_logger, spectrum_key
-from config import EIS_IM_STORED_AS_POSITIVE, MIN_POINTS_PER_SPECTRUM
-
-log = get_logger()
 
 
 class Spectrum:
-    """Container for a single EIS spectrum sorted by descending frequency."""
+    """Sorted, validated impedance sweep ready for ZARC fitting."""
 
-    __slots__ = ("key", "ionic_radius", "temperature",
-                 "f", "omega", "Z", "n_points")
+    __slots__ = ("sample_id", "timestamp", "f", "omega", "Z", "n_points")
 
-    def __init__(self, ionic_radius: float, temperature: float,
-                 f: np.ndarray, Z: np.ndarray):
-        self.key = spectrum_key(ionic_radius, temperature)
-        self.ionic_radius = float(ionic_radius)
-        self.temperature = float(temperature)
+    def __init__(
+        self,
+        f: np.ndarray,
+        Z: np.ndarray,
+        sample_id: Optional[str] = None,
+        timestamp: Optional[str] = None,
+    ) -> None:
+        if f.shape != Z.shape:
+            raise ValueError(
+                f"frequency and impedance arrays must match shape: "
+                f"{f.shape} vs {Z.shape}"
+            )
+
+        # Drop non-finite points and non-positive frequencies
+        mask = np.isfinite(f) & np.isfinite(Z) & (f > 0)
+        f = f[mask]
+        Z = Z[mask]
+
         # Sort high -> low frequency (typical EIS convention)
         order = np.argsort(-f)
-        self.f = f[order]
-        self.omega = 2 * np.pi * self.f
-        self.Z = Z[order]
-        self.n_points = int(self.f.size)
+        self.f: np.ndarray = f[order].astype(np.float64)
+        self.omega: np.ndarray = 2.0 * np.pi * self.f
+        self.Z: np.ndarray = Z[order].astype(np.complex128)
+        self.n_points: int = int(self.f.size)
+        self.sample_id: Optional[str] = sample_id
+        self.timestamp: Optional[str] = timestamp
 
+    # ----- derived views ---------------------------------------------
     @property
-    def re(self):
+    def re(self) -> np.ndarray:
         return self.Z.real
 
     @property
-    def im(self):
-        return self.Z.imag       # negative for capacitive systems
+    def im(self) -> np.ndarray:
+        """Im(Z) (<= 0 for RC-type systems)."""
+        return self.Z.imag
 
     @property
-    def neg_im(self):
-        return -self.Z.imag      # what goes on the Nyquist y-axis
+    def neg_im(self) -> np.ndarray:
+        """-Im(Z) (>= 0; what would go on the Nyquist y-axis)."""
+        return -self.Z.imag
 
     @property
-    def magnitude(self):
+    def magnitude(self) -> np.ndarray:
         return np.abs(self.Z)
 
     @property
-    def phase_deg(self):
+    def phase_deg(self) -> np.ndarray:
         return np.degrees(np.angle(self.Z))
-
-
-def build_spectra(df: pd.DataFrame) -> List[Spectrum]:
-    """Group EIS dataframe by (ionic_radius, temperature) into Spectrum objs."""
-    spectra: List[Spectrum] = []
-    skipped = 0
-
-    for (rad, T), grp in df.groupby(["ionic_radius", "temperature"], sort=True):
-        f = grp["frequency"].to_numpy(dtype=float)
-        re = grp["re_z"].to_numpy(dtype=float)
-        im_raw = grp["im_z"].to_numpy(dtype=float)
-
-        # Apply sign convention: file stores positive |Im(Z)| -> store as -|Im|
-        im = -np.abs(im_raw) if EIS_IM_STORED_AS_POSITIVE else im_raw
-
-        Z = re + 1j * im
-
-        # Drop any non-finite or non-positive frequencies
-        ok = np.isfinite(f) & np.isfinite(Z) & (f > 0)
-        f, Z = f[ok], Z[ok]
-
-        if f.size < MIN_POINTS_PER_SPECTRUM:
-            skipped += 1
-            log.warning(f"Skipping {spectrum_key(rad, T)}: only {f.size} points")
-            continue
-
-        spectra.append(Spectrum(rad, T, f, Z))
-
-    log.info(f"Built {len(spectra)} spectra (skipped {skipped})")
-    return spectra
-
-
-def spectra_summary(spectra: List[Spectrum]) -> pd.DataFrame:
-    rows = []
-    for s in spectra:
-        rows.append({
-            "key": s.key,
-            "ionic_radius": s.ionic_radius,
-            "temperature": s.temperature,
-            "n_points": s.n_points,
-            "f_min_hz": float(s.f.min()),
-            "f_max_hz": float(s.f.max()),
-            "Z_min_ohm": float(np.abs(s.Z).min()),
-            "Z_max_ohm": float(np.abs(s.Z).max()),
-        })
-    return pd.DataFrame(rows)

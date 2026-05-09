@@ -1,4 +1,0 @@
-model,accuracy,precision_macro,recall_macro,f1_macro
-RandomForest,1.0,1.0,1.0,1.0
-LogReg,1.0,1.0,1.0,1.0
-SVM-RBF,0.9642857142857143,0.95,0.9736842105263157,0.9601706970128023
