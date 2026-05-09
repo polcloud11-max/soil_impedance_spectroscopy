@@ -18,7 +18,7 @@ No CSV demo data, no plotting, no machine learning.
                 │
                 ▼
    ┌──────────────────────────────┐
-   │  load_sensor_sweep()         │   src/data_loading.py
+   │  load_sensor_sweep()         │   zarc_pipeline/src/data_loading.py
    │  • validate required keys    │
    │  • align array shapes        │
    │  • Im(Z) := -|neg_im_z_ohm|  │   (sign convention)
@@ -28,7 +28,7 @@ No CSV demo data, no plotting, no machine learning.
                   │ Spectrum (f sorted high→low, Z = Re + jIm)
                   ▼
    ┌──────────────────────────────┐
-   │  fit_spectrum()              │   src/zarc_fitting.py
+   │  fit_spectrum()              │   zarc_pipeline/src/zarc_fitting.py
    │  Z(ω) = Rs + R/(1+(jωτ)^α)   │
    │  • scipy least_squares (TRF) │
    │  • multi-start (3 α × 3 τ)   │
@@ -40,7 +40,7 @@ No CSV demo data, no plotting, no machine learning.
                   │           n_points, success, message }
                   ▼
    ┌──────────────────────────────┐
-   │  calculate_vwc()             │   src/moisture_calibration.py
+   │  calculate_vwc()             │   zarc_pipeline/src/moisture_calibration.py
    │  R_total = Rs + R            │
    │  VWC%   = A·R_total^B+OFFSET │   (clamped 0..100)
    │  C_bulk = tau / max(R, 1e-6) │
@@ -48,7 +48,7 @@ No CSV demo data, no plotting, no machine learning.
                   │ { vwc_percent, bulk_capacitance_farads, r_total_ohms }
                   ▼
    ┌──────────────────────────────┐
-   │  build_output_record()       │   main.py
+   │  build_output_record()       │   zarc_pipeline/main.py
    │  assemble final JSON record  │
    └──────────────┬───────────────┘
                   │
@@ -102,18 +102,19 @@ External deps: **numpy**, **scipy** only.
 ## Folder layout
 
 ```
-zarc_pipeline/
+Zarc/
 ├── README.md
-├── requirements.txt
-├── config.py                       # MIN_POINTS_PER_SPECTRUM, ZARC_BOUNDS
-├── main.py                         # CLI + processing loop
-└── src/
-    ├── __init__.py
-    ├── data_loading.py             # load_sensor_sweep()
-    ├── preprocessing.py            # Spectrum
-    ├── zarc_fitting.py             # fit_spectrum(), ZarcFit, zarc_impedance()
-    ├── moisture_calibration.py     # calculate_vwc()
-    └── utils.py                    # get_logger()
+└── zarc_pipeline/
+    ├── requirements.txt
+    ├── config.py                   # MIN_POINTS_PER_SPECTRUM, ZARC_BOUNDS
+    ├── main.py                     # CLI + processing loop
+    └── src/
+        ├── __init__.py
+        ├── data_loading.py         # load_sensor_sweep()
+        ├── preprocessing.py        # Spectrum
+        ├── zarc_fitting.py         # fit_spectrum(), ZarcFit, zarc_impedance()
+        ├── moisture_calibration.py # calculate_vwc()
+        └── utils.py                # get_logger()
 ```
 
 ---
@@ -121,7 +122,7 @@ zarc_pipeline/
 ## Install
 
 ```bash
-pip install -r requirements.txt
+pip install -r zarc_pipeline/requirements.txt
 ```
 
 ## Run
@@ -129,19 +130,19 @@ pip install -r requirements.txt
 **Stream mode (default)** — one JSON payload per stdin line, one JSON per sweep on stdout:
 
 ```bash
-python main.py < live_bus.ndjson
+python zarc_pipeline/main.py < live_bus.ndjson
 ```
 
 **Batch mode** — file containing a JSON array OR newline-delimited JSON:
 
 ```bash
-python main.py --input sweeps.json
+python zarc_pipeline/main.py --input sweeps.json
 ```
 
 **Mirror output to a log file:**
 
 ```bash
-python main.py --input sweeps.json --log-file outputs.ndjson
+python zarc_pipeline/main.py --input sweeps.json --log-file outputs.ndjson
 ```
 
 ---
@@ -298,12 +299,12 @@ CALIBRATION_B      = -0.45
 CALIBRATION_OFFSET = 2.0
 ```
 
-The constants are module-level attributes in `src/moisture_calibration.py`,
+The constants are module-level attributes in `zarc_pipeline/src/moisture_calibration.py`,
 overwritable at boot from a calibration file without code changes.
 
 ---
 
-## Configuration (`config.py`)
+## Configuration (`zarc_pipeline/config.py`)
 
 | Name | Default | Purpose |
 |---|---|---|
