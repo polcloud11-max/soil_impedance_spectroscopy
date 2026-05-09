@@ -1,0 +1,152 @@
+{
+  "feature_descriptions": {
+    "Rs": "Series resistance (Ohm) \u2014 high-frequency intercept",
+    "R": "Polarization resistance (Ohm) \u2014 Nyquist arc diameter",
+    "tau": "Relaxation time (s) \u2014 characteristic time-constant",
+    "alpha": "Cole-Cole depression exponent (1=ideal, <1=depressed)",
+    "f_char_hz": "Characteristic frequency 1/(2*pi*tau)",
+    "log10_R_over_Rs": "log10(R/Rs) \u2014 relative size of polarization arc",
+    "Z_min_mag": "min |Z| over the spectrum",
+    "Z_max_mag": "max |Z| over the spectrum",
+    "log10_Z_range": "log10(max|Z| / min|Z|) \u2014 dynamic range of |Z|",
+    "phase_min_deg": "Most negative measured phase",
+    "phase_max_deg": "Highest (least negative) measured phase",
+    "phase_range_deg": "phase_max - phase_min",
+    "f_at_phase_min_hz": "Frequency at which phase is most negative",
+    "neg_im_peak": "Maximum -Im(Z) (peak height of Nyquist arc)",
+    "f_at_neg_im_peak_hz": "Frequency at the Nyquist arc apex",
+    "re_at_neg_im_peak": "Re(Z) at the Nyquist arc apex (~ Rs + R/2)"
+  },
+  "eis": {
+    "eis_info": {
+      "n_rows": 4648,
+      "n_ionic_radii": 2,
+      "n_temperatures": 19,
+      "n_spectra": 28,
+      "freq_min_hz": 1.0,
+      "freq_max_hz": 1000000.0,
+      "re_z_range": [
+        1330.0,
+        3400000.0
+      ],
+      "im_z_range": [
+        -59500.0,
+        1440000.0
+      ]
+    },
+    "n_spectra": 28,
+    "n_fits_ok": 28,
+    "n_fits_total": 28,
+    "feature_columns": [
+      "key",
+      "ionic_radius",
+      "temperature",
+      "n_points",
+      "Rs",
+      "R",
+      "tau",
+      "alpha",
+      "f_char_hz",
+      "log10_R_over_Rs",
+      "fit_rmse_rel",
+      "fit_ok",
+      "Z_min_mag",
+      "Z_max_mag",
+      "log10_Z_range",
+      "phase_min_deg",
+      "phase_max_deg",
+      "phase_range_deg",
+      "f_at_phase_min_hz",
+      "neg_im_peak",
+      "f_at_neg_im_peak_hz",
+      "re_at_neg_im_peak"
+    ],
+    "classification_metrics": [
+      {
+        "model": "RandomForest",
+        "accuracy": 1.0,
+        "precision_macro": 1.0,
+        "recall_macro": 1.0,
+        "f1_macro": 1.0
+      },
+      {
+        "model": "LogReg",
+        "accuracy": 1.0,
+        "precision_macro": 1.0,
+        "recall_macro": 1.0,
+        "f1_macro": 1.0
+      },
+      {
+        "model": "SVM-RBF",
+        "accuracy": 0.9642857142857143,
+        "precision_macro": 0.95,
+        "recall_macro": 0.9736842105263157,
+        "f1_macro": 0.9601706970128023
+      }
+    ]
+  },
+  "soil": {
+    "soil_info": {
+      "n_rows": 1944,
+      "n_missing_impedance": 0,
+      "n_missing_temp": 832,
+      "impedance_stats": {
+        "min": 0.0,
+        "median": 268.25,
+        "mean": 317.7258693415638,
+        "max": 5494.79
+      },
+      "depths_present": [
+        3,
+        5,
+        10,
+        20
+      ],
+      "n_stations": 12
+    },
+    "soil_stats": {
+      "n_rows": 1944,
+      "by_depth": {
+        "3": {
+          "count": 592,
+          "mean": 301.3670101351351,
+          "median": 244.615,
+          "std": 259.95313964022836
+        },
+        "5": {
+          "count": 658,
+          "mean": 361.57603343465047,
+          "median": 292.19,
+          "std": 224.4564282353603
+        },
+        "10": {
+          "count": 664,
+          "mean": 276.61757530120485,
+          "median": 274.4,
+          "std": 86.26029587439523
+        },
+        "20": {
+          "count": 30,
+          "mean": 588.624,
+          "median": 631.18,
+          "std": 295.39919416694886
+        }
+      },
+      "impedance_quantiles": {
+        "0.05": 172.4115,
+        "0.25": 210.70749999999998,
+        "0.5": 268.25,
+        "0.75": 356.08000000000004,
+        "0.95": 635.8015
+      },
+      "corr_imp_temp": -0.15554988367337183
+    },
+    "note": "Soil dataset has only scalar TOTAL_IMPEDANCE per row (no frequency sweep). ZARC fitting is NOT applied here."
+  },
+  "scientific_notes": [
+    "Dataset.csv is treated as the EIS core: real frequency-resolved spectra suitable for Nyquist/Bode/ZARC fitting and feature extraction.",
+    "soil_impedance_all.csv contains only scalar impedance per observation -- it is used for context and exploratory clustering, NEVER for ZARC fitting.",
+    "Sign convention: stored Img(Z) is treated as |Im(Z)|; internally Im(Z) <= 0 (capacitive); Nyquist plots show -Im(Z) on the y-axis.",
+    "Classification uses ionic_radius as a real (not fabricated) label and Leave-One-Temperature-Out CV. With only 28 spectra this is a small-data demo, not a deployment benchmark."
+  ]
+}
