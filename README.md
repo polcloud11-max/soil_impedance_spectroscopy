@@ -316,26 +316,6 @@ overwritable at boot from a calibration file without code changes.
 
 ---
 
-## Relationship to the source paper
-
-Umar & Setiadi (AIP Conf. Proc. 1656, 040005, 2015) provide the **motivation**:
-soil impedance varies systematically with moisture across frequency, so
-frequency-domain sensing carries more information than a single-frequency
-conductivity reading.
-
-The **method** here differs:
-
-| | Paper | This pipeline |
-|---|---|---|
-| Model | Linear regression `Z(f, θ_w) = (a₀₀+a₀₁·f) − B·θ_w` | Cole-Cole / ZARC equivalent circuit |
-| Calibrated soils | One inceptisol, 6–9 MHz | Soil-agnostic; per-probe calibration on `A, B, OFFSET` |
-| Constants | 2 (slope + intercept) | 3 (power-law A, B, OFFSET) |
-
-ZARC fitting is from standard EIS literature, not from the paper. The
-power-law VWC mapping is per the project specification.
-
----
-
 ## Limitations
 
 * `CALIBRATION_A/B/OFFSET` are placeholders. `vwc_percent` is *qualitatively*
@@ -349,3 +329,4 @@ power-law VWC mapping is per the project specification.
   drop in without changing call sites.
 * No pre-fit DSP layer (Hampel filter, Kramers-Kronig validation). Bad
   sweeps surface as elevated `rmse_rel`; downstream consumers should gate on it.
+
